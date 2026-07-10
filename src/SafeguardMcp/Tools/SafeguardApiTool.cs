@@ -20,17 +20,20 @@ internal sealed class SafeguardApiTool
     private readonly CatalogProvider catalogProvider;
     private readonly IConfiguration configuration;
     private readonly ILogger<SafeguardApiTool> logger;
+    private readonly SchemaConsultationTracker schemaTracker;
 
     public SafeguardApiTool(
         ISafeguardSession session,
         CatalogProvider catalogProvider,
         IConfiguration configuration,
-        ILogger<SafeguardApiTool> logger = null)
+        ILogger<SafeguardApiTool> logger = null,
+        SchemaConsultationTracker schemaTracker = null)
     {
         this.session = session;
         this.catalogProvider = catalogProvider;
         this.configuration = configuration;
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SafeguardApiTool>.Instance;
+        this.schemaTracker = schemaTracker;
     }
 
     private int MaxResultsBeforeTruncation => ParseInt(configuration["Safeguard:MaxResultsBeforeTruncation"], 100);
@@ -528,6 +531,15 @@ internal sealed class SafeguardApiTool
             sb.AppendLine().Append(responseHeading).AppendLine(":").AppendLine("  No response schema available.");
 
         AppendPropertyPaths(sb, responseSchema, requestSchema);
+
+        var conditionalNote = SchemaConditionalRules.Lookup(normalizedMethod, normalizedPath);
+        if (!string.IsNullOrWhiteSpace(conditionalNote))
+            sb.AppendLine().AppendLine(conditionalNote);
+
+        // Remember this endpoint was schema-inspected so a later failed write to it
+        // does not get nagged to "read the schema first".
+        var (consultedTemplate, _) = ResolveTemplatePath(normalizedMethod, serviceName, normalizedPath);
+        schemaTracker?.Record(normalizedMethod, consultedTemplate);
 
         return sb.ToString().TrimEnd();
     }
@@ -1556,27 +1568,7 @@ internal sealed class SafeguardApiTool
     private (string TemplatePath, bool TemplateMatched, ApiSchemaPropertyPath[] Paths) ResolveErrorContext(
         string method, string serviceName, string requestPath)
     {
-        var endpoints = catalogProvider.GetEndpoints();
-        string templatePath = null;
-        for (int i = 0; i < endpoints.Length; i++)
-        {
-            ref readonly var endpoint = ref endpoints[i];
-            if (!endpoint.Service.Equals(serviceName, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (!PathsMatch(endpoint.Path, requestPath))
-                continue;
-            // Prefer the endpoint matching the actual method; otherwise keep
-            // looking but remember the first path match as a fallback.
-            if (endpoint.Method.Equals(method, StringComparison.OrdinalIgnoreCase))
-            {
-                templatePath = endpoint.Path;
-                break;
-            }
-            templatePath ??= endpoint.Path;
-        }
-
-        var matched = templatePath != null;
-        templatePath ??= requestPath;
+        var (templatePath, matched) = ResolveTemplatePath(method, serviceName, requestPath);
 
         var response = catalogProvider.GetResponseSchema(method, serviceName, templatePath)
             ?? catalogProvider.GetResponseSchema("GET", serviceName, templatePath);
@@ -1589,6 +1581,36 @@ internal sealed class SafeguardApiTool
             paths = request.Value.Paths;
 
         return (templatePath, matched, paths ?? Array.Empty<ApiSchemaPropertyPath>());
+    }
+
+    /// <summary>
+    /// Resolves a concrete request path to its catalog template (e.g.
+    /// <c>/v4/Assets/47</c> -&gt; <c>/v4/Assets/{id}</c>), preferring the endpoint
+    /// that matches <paramref name="method"/>. Returns the original path (and
+    /// matched=false) when no template matches. Shared by the error-hint path and
+    /// schema-consultation tracking so both key on the same template string.
+    /// </summary>
+    private (string TemplatePath, bool Matched) ResolveTemplatePath(
+        string method, string serviceName, string requestPath)
+    {
+        var endpoints = catalogProvider.GetEndpoints();
+        string templatePath = null;
+        for (int i = 0; i < endpoints.Length; i++)
+        {
+            ref readonly var endpoint = ref endpoints[i];
+            if (!endpoint.Service.Equals(serviceName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!PathsMatch(endpoint.Path, requestPath))
+                continue;
+            // Prefer the endpoint matching the actual method; otherwise keep
+            // looking but remember the first path match as a fallback.
+            if (endpoint.Method.Equals(method, StringComparison.OrdinalIgnoreCase))
+                return (endpoint.Path, true);
+            templatePath ??= endpoint.Path;
+        }
+
+        var matched = templatePath != null;
+        return (templatePath ?? requestPath, matched);
     }
 
     private static int ExtractStatusCode(string message)
@@ -1707,16 +1729,34 @@ internal sealed class SafeguardApiTool
         var hint = ApiToolHelpers.GetErrorHint(
             statusCode, apiMessage, hasModelState, ctx, paths,
             requestPath, templateMatched, pathSuggestions, supportedMethods);
-        if (!string.IsNullOrWhiteSpace(hint))
-            return hint;
 
-        if (rawMessage != null
+        if (string.IsNullOrWhiteSpace(hint)
+            && rawMessage != null
             && rawMessage.Contains("Authentication expired", StringComparison.OrdinalIgnoreCase))
         {
-            return "Token expired. Call Safeguard_Connect to re-authenticate.";
+            hint = "Token expired. Call Safeguard_Connect to re-authenticate.";
         }
 
-        return null;
+        return ApplySchemaGating(statusCode, method, templatePath, hint);
+    }
+
+    /// <summary>
+    /// Prepends a "read the schema first" directive when a write (POST/PUT/PATCH)
+    /// fails with HTTP 400 and its endpoint was never inspected with
+    /// Safeguard_Schema this session. A write 400 is almost always a request-content
+    /// problem, and the schema now carries required + conditional fields, so a single
+    /// schema read frequently prevents the retry loop. No-op when the tracker is
+    /// absent (unit tests / direct construction) or the schema was already consulted.
+    /// </summary>
+    private string ApplySchemaGating(int statusCode, string method, string templatePath, string baseHint)
+    {
+        if (schemaTracker == null)
+            return baseHint;
+
+        var consulted = string.IsNullOrWhiteSpace(templatePath)
+            || schemaTracker.WasConsulted(method, templatePath);
+        return ApiToolHelpers.ApplySchemaConsultationGating(
+            statusCode, method, templatePath, consulted, baseHint);
     }
 
     private string[] CollectSupportedMethods(string serviceName, string templatePath)
