@@ -4,30 +4,98 @@ namespace SafeguardMcp.Tests;
 
 public class SchemaConsultationTrackerTests
 {
+    private const string Session = "session-A";
+
     [Fact]
     public void WasConsulted_FalseUntilRecorded()
     {
         var t = new SchemaConsultationTracker();
-        Assert.False(t.WasConsulted("POST", "/v4/Users"));
-        t.Record("POST", "/v4/Users");
-        Assert.True(t.WasConsulted("POST", "/v4/Users"));
+        Assert.False(t.WasConsulted(Session, "POST", "/v4/Users"));
+        t.Record(Session, "POST", "/v4/Users");
+        Assert.True(t.WasConsulted(Session, "POST", "/v4/Users"));
     }
 
     [Fact]
     public void Record_IsMethodSpecific()
     {
         var t = new SchemaConsultationTracker();
-        t.Record("POST", "/v4/Users");
-        Assert.True(t.WasConsulted("POST", "/v4/Users"));
-        Assert.False(t.WasConsulted("PUT", "/v4/Users"));
+        t.Record(Session, "POST", "/v4/Users");
+        Assert.True(t.WasConsulted(Session, "POST", "/v4/Users"));
+        Assert.False(t.WasConsulted(Session, "PUT", "/v4/Users"));
     }
 
     [Fact]
     public void WasConsulted_IsCaseInsensitive()
     {
         var t = new SchemaConsultationTracker();
-        t.Record("post", "/v4/users");
-        Assert.True(t.WasConsulted("POST", "/v4/Users"));
+        t.Record(Session, "post", "/v4/users");
+        Assert.True(t.WasConsulted(Session, "POST", "/v4/Users"));
+    }
+
+    [Fact]
+    public void Consultation_PersistsAcrossCalls_WithinSameSession()
+    {
+        var t = new SchemaConsultationTracker();
+        t.Record(Session, "POST", "/v4/Users");
+        t.Record(Session, "PUT", "/v4/Assets/{id}");
+
+        // A later, independent call for the same session still sees both records —
+        // this is the HTTP-mode fix: memory survives across per-request DI scopes.
+        Assert.True(t.WasConsulted(Session, "POST", "/v4/Users"));
+        Assert.True(t.WasConsulted(Session, "PUT", "/v4/Assets/{id}"));
+    }
+
+    [Fact]
+    public void Consultation_IsIsolatedBetweenSessions()
+    {
+        var t = new SchemaConsultationTracker();
+        t.Record("session-A", "POST", "/v4/Users");
+
+        Assert.True(t.WasConsulted("session-A", "POST", "/v4/Users"));
+        Assert.False(t.WasConsulted("session-B", "POST", "/v4/Users"));
+    }
+
+    [Fact]
+    public void BlankSessionId_CollapsesToSingleSession()
+    {
+        var t = new SchemaConsultationTracker();
+        t.Record(null, "POST", "/v4/Users");
+
+        // stdio has no MCP session id; null/empty/whitespace must all resolve to the
+        // same default session so the memory still works as one process-wide session.
+        Assert.True(t.WasConsulted("", "POST", "/v4/Users"));
+        Assert.True(t.WasConsulted("   ", "POST", "/v4/Users"));
+        Assert.True(t.WasConsulted(SchemaConsultationTracker.DefaultSessionId, "POST", "/v4/Users"));
+    }
+
+    [Fact]
+    public void SessionEviction_DropsLeastRecentlyUsedSession()
+    {
+        var t = new SchemaConsultationTracker();
+
+        // Record one endpoint under the oldest session, then touch it so it is the LRU.
+        t.Record("oldest", "POST", "/v4/Users");
+
+        // Fill up to the session cap with distinct fresh sessions, pushing "oldest" out.
+        for (var i = 0; i < SchemaConsultationTracker.MaxSessions; i++)
+            t.Record($"s{i}", "POST", "/v4/Users");
+
+        Assert.False(t.WasConsulted("oldest", "POST", "/v4/Users"));
+        Assert.True(t.WasConsulted($"s{SchemaConsultationTracker.MaxSessions - 1}", "POST", "/v4/Users"));
+    }
+
+    [Fact]
+    public void PerSessionEntryCap_IsBounded()
+    {
+        var t = new SchemaConsultationTracker();
+
+        // Overflow the per-session entry cap; the most recent entry must still be present
+        // and the session must not be dropped.
+        for (var i = 0; i < SchemaConsultationTracker.MaxEntriesPerSession + 50; i++)
+            t.Record(Session, "POST", $"/v4/Endpoint{i}");
+
+        var lastPath = $"/v4/Endpoint{SchemaConsultationTracker.MaxEntriesPerSession + 49}";
+        Assert.True(t.WasConsulted(Session, "POST", lastPath));
     }
 
     [Theory]
@@ -37,8 +105,8 @@ public class SchemaConsultationTrackerTests
     public void RecordAndWasConsulted_IgnoreMissingArgs(string? method, string? path)
     {
         var t = new SchemaConsultationTracker();
-        t.Record(method, path);
-        Assert.False(t.WasConsulted(method, path));
+        t.Record(Session, method, path);
+        Assert.False(t.WasConsulted(Session, method, path));
     }
 }
 

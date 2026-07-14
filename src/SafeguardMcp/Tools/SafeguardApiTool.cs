@@ -470,7 +470,8 @@ internal sealed class SafeguardApiTool
     public string Safeguard_Schema(
         [Description("API path, e.g. '/v4/AssetAccounts'. Must start with /v4/... (no /service/{name}/ prefix).")] string path,
         [Description("HTTP method: POST, PUT, or GET (for response schema). Default: POST")] string method = "POST",
-        [Description("Levels to expand nested object/array properties. Default 1, max 3.")] int depth = 1)
+        [Description("Levels to expand nested object/array properties. Default 1, max 3.")] int depth = 1,
+        McpServer server = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new McpException("The 'path' parameter is required (e.g. '/v4/AssetAccounts').");
@@ -537,9 +538,11 @@ internal sealed class SafeguardApiTool
             sb.AppendLine().AppendLine(conditionalNote);
 
         // Remember this endpoint was schema-inspected so a later failed write to it
-        // does not get nagged to "read the schema first".
+        // does not get nagged to "read the schema first". Keyed by MCP session id so
+        // the memory survives across this session's tool calls without bleeding across
+        // sessions/tenants.
         var (consultedTemplate, _) = ResolveTemplatePath(normalizedMethod, serviceName, normalizedPath);
-        schemaTracker?.Record(normalizedMethod, consultedTemplate);
+        schemaTracker?.Record(server?.SessionId, normalizedMethod, consultedTemplate);
 
         return sb.ToString().TrimEnd();
     }
@@ -910,7 +913,7 @@ internal sealed class SafeguardApiTool
         }
         catch (McpException ex)
         {
-            throw new McpException(FormatErrorResponse(ex, normalizedMethod, GetServiceName(service), normalizedPath));
+            throw new McpException(FormatErrorResponse(ex, normalizedMethod, GetServiceName(service), normalizedPath, server?.SessionId));
         }
     }
 
@@ -1521,7 +1524,7 @@ internal sealed class SafeguardApiTool
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
-    private string FormatErrorResponse(McpException ex, string method, string serviceName, string requestPath)
+    private string FormatErrorResponse(McpException ex, string method, string serviceName, string requestPath, string sessionId = null)
     {
         var rawMessage = ex.Message ?? "Safeguard API request failed.";
         var statusCode = ExtractStatusCode(rawMessage);
@@ -1558,7 +1561,8 @@ internal sealed class SafeguardApiTool
             !string.IsNullOrWhiteSpace(modelStateSummary),
             method,
             serviceName,
-            requestPath);
+            requestPath,
+            sessionId);
         if (!string.IsNullOrWhiteSpace(hint))
             lines.Add($"Hint: {hint}");
 
@@ -1710,7 +1714,8 @@ internal sealed class SafeguardApiTool
         bool hasModelState,
         string method,
         string serviceName,
-        string requestPath)
+        string requestPath,
+        string sessionId = null)
     {
         var (templatePath, templateMatched, paths) = ResolveErrorContext(method, serviceName, requestPath);
         var ctx = new ErrorContext(serviceName, method, templatePath);
@@ -1737,7 +1742,7 @@ internal sealed class SafeguardApiTool
             hint = "Token expired. Call Safeguard_Connect to re-authenticate.";
         }
 
-        return ApplySchemaGating(statusCode, method, templatePath, hint);
+        return ApplySchemaGating(statusCode, method, templatePath, hint, sessionId);
     }
 
     /// <summary>
@@ -1748,13 +1753,13 @@ internal sealed class SafeguardApiTool
     /// schema read frequently prevents the retry loop. No-op when the tracker is
     /// absent (unit tests / direct construction) or the schema was already consulted.
     /// </summary>
-    private string ApplySchemaGating(int statusCode, string method, string templatePath, string baseHint)
+    private string ApplySchemaGating(int statusCode, string method, string templatePath, string baseHint, string sessionId = null)
     {
         if (schemaTracker == null)
             return baseHint;
 
         var consulted = string.IsNullOrWhiteSpace(templatePath)
-            || schemaTracker.WasConsulted(method, templatePath);
+            || schemaTracker.WasConsulted(sessionId, method, templatePath);
         return ApiToolHelpers.ApplySchemaConsultationGating(
             statusCode, method, templatePath, consulted, baseHint);
     }
