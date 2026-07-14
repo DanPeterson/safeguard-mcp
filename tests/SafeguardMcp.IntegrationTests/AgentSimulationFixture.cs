@@ -191,6 +191,14 @@ public class AgentSimulationFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// Calls <c>Safeguard_Execute</c> and returns the full response envelope without
+    /// peeling <c>data</c> off. Use this when a test needs to assert on <c>meta</c> —
+    /// e.g. <c>meta.count</c> for a <c>count=true</c> request, where <c>data</c> is null.
+    /// </summary>
+    public Task<string> ExecuteRawAsync(string method, string path, string query = null, string body = null, string format = "json")
+        => ApiTool.Safeguard_Execute(null, method: method, path: path, query: query, body: body, format: format);
+
+    /// <summary>
     /// Retrieves an access-request password via Safeguard_RetrieveCredential
     /// (the only path that performs the password checkout — Safeguard_Execute
     /// refuses CheckOutPassword as a sensitive endpoint). Returns the

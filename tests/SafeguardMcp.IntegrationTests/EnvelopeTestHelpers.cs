@@ -45,4 +45,37 @@ internal static class EnvelopeTestHelpers
 
         return response;
     }
+
+    /// <summary>
+    /// Reads <c>meta.count</c> from a Safeguard_Execute envelope. A <c>count=true</c>
+    /// request surfaces the row count here (with <c>data</c> left null) rather than
+    /// overloading <c>data</c> with a bare integer. Returns false when the response is
+    /// not an envelope or carries no numeric <c>meta.count</c>.
+    /// </summary>
+    internal static bool TryGetMetaCount(string response, out long count)
+    {
+        count = 0;
+        if (string.IsNullOrEmpty(response)) return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("meta", out var meta)
+                && meta.ValueKind == JsonValueKind.Object
+                && meta.TryGetProperty("count", out var countEl)
+                && countEl.ValueKind == JsonValueKind.Number
+                && countEl.TryGetInt64(out var value))
+            {
+                count = value;
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON responses have no meta.count.
+        }
+
+        return false;
+    }
 }

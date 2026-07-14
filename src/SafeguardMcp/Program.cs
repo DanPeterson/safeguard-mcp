@@ -148,6 +148,10 @@ Documentation: https://github.com/OneIdentity/safeguard-mcp";
 
             RegisterServices(builder.Services);
             builder.Services.AddSingleton<ISafeguardSession, StdioSafeguardSession>();
+            // Singleton, session-keyed: stdio is a single MCP session, so schema-
+            // consultation memory persists across tool calls for the life of the
+            // process (blank session id collapses to the tracker's default session).
+            builder.Services.AddSingleton<SchemaConsultationTracker>();
 
             AddSafeguardMcpComponents(builder.Services.AddMcpServer().WithStdioServerTransport());
 
@@ -187,6 +191,11 @@ Documentation: https://github.com/OneIdentity/safeguard-mcp";
             builder.Services.AddHttpContextAccessor();
             // Scoped: each MCP HTTP request gets a fresh session bound to its bearer.
             builder.Services.AddScoped<ISafeguardSession, HttpRelaySafeguardSession>();
+            // Singleton, but partitioned by MCP session id so schema-consultation
+            // memory persists across a session's tool calls (each MCP JSON-RPC call
+            // is its own HTTP request/DI scope, so a scoped tracker could never
+            // remember anything) while staying isolated between tenants/sessions.
+            builder.Services.AddSingleton<SchemaConsultationTracker>();
             builder.Services.AddHealthChecks();
 
             if (bridgeOptions != null)

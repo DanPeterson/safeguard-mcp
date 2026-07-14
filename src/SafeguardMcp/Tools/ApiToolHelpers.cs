@@ -346,6 +346,30 @@ internal static class ApiToolHelpers
     };
 
     /// <summary>
+    /// Prepends a "read the schema first" directive to <paramref name="baseHint"/>
+    /// when a write (POST/PUT/PATCH) fails with HTTP 400 and the endpoint's schema
+    /// was not consulted this session. A write 400 is almost always a request-content
+    /// problem, and Safeguard_Schema now surfaces required + conditional fields, so a
+    /// single schema read frequently prevents the retry loop. Pure/stateless: the
+    /// caller supplies <paramref name="wasConsulted"/> from the session tracker.
+    /// </summary>
+    internal static string ApplySchemaConsultationGating(
+        int statusCode, string method, string templatePath, bool wasConsulted, string baseHint)
+    {
+        var isWrite = method != null
+            && (method.Equals("POST", StringComparison.OrdinalIgnoreCase)
+                || method.Equals("PUT", StringComparison.OrdinalIgnoreCase)
+                || method.Equals("PATCH", StringComparison.OrdinalIgnoreCase));
+
+        if (statusCode != 400 || !isWrite || wasConsulted || string.IsNullOrWhiteSpace(templatePath))
+            return baseHint;
+
+        var directive = $"You have not called Safeguard_Schema for {method} {templatePath} in this session. "
+            + $"Call Safeguard_Schema path={templatePath} method={method} to see required and conditional fields, then retry.";
+        return string.IsNullOrWhiteSpace(baseHint) ? directive : directive + " " + baseHint;
+    }
+
+    /// <summary>
     /// Context-aware hint that inspects the parsed Safeguard error message and surfaced
     /// validation state to return more specific guidance for known failure shapes.
     /// </summary>
@@ -452,6 +476,12 @@ internal static class ApiToolHelpers
                 return BuildPropertyHint(apiMessage, paths, QueryParamKind.Filter, ctx);
             if (apiMessage.Contains("Invalid field property", StringComparison.OrdinalIgnoreCase))
                 return BuildPropertyHint(apiMessage, paths, QueryParamKind.Fields, ctx);
+            // 70010: "enum value is not defined: <Value>". The parser rejected a
+            // literal that is not a member of the property's enum. Schema types the
+            // property but does not list members, so point at Safeguard_Reference
+            // topic=enum (the authoritative member list) and note case-sensitivity.
+            if (apiMessage.Contains("enum value is not defined", StringComparison.OrdinalIgnoreCase))
+                return BuildEnumValueHint(apiMessage, ctx);
         }
 
         // Access-request 90408: "not authorized to use this request type" — wire-accurate but
@@ -560,6 +590,38 @@ internal static class ApiToolHelpers
             "Assets" or "AssetAccounts" or "Users" or "UserGroups" or "AccountGroups" or "AssetGroups" => resource,
             _ => "<Resource>",
         };
+    }
+
+    // 70010: build a hint from an "enum value is not defined: <Value>" message.
+    // Extracts the rejected literal (after the last ':') and routes the agent to
+    // the enum member list. Stays generic — it never guesses the enum type name,
+    // since the wire message does not carry it.
+    private static string BuildEnumValueHint(string apiMessage, ErrorContext ctx)
+    {
+        var badValue = ExtractTrailingColonValue(apiMessage);
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(badValue))
+            sb.Append('\'').Append(badValue).Append("' is not a defined enum value for this property. ");
+        else
+            sb.Append("That value is not a defined enum value for this property. ");
+        sb.Append("Enum values are case-sensitive and must match a defined member exactly. ");
+        sb.Append("Call Safeguard_Reference topic=enum to list enum types, then topic=enum name=<EnumType> for its valid members");
+        if (!string.IsNullOrWhiteSpace(ctx.Path))
+            sb.Append(" (Safeguard_Schema path=").Append(ctx.Path).Append(" shows which enum type each property uses)");
+        sb.Append('.');
+        return sb.ToString();
+    }
+
+    // Returns the trimmed text after the final ':' in a message, or null when there
+    // is no colon or no trailing token. Used to pull "<Value>" out of
+    // "...enum value is not defined: <Value>".
+    private static string ExtractTrailingColonValue(string message)
+    {
+        if (string.IsNullOrEmpty(message)) return null;
+        var idx = message.LastIndexOf(':');
+        if (idx < 0 || idx >= message.Length - 1) return null;
+        var value = message[(idx + 1)..].Trim().TrimEnd('.');
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static string BuildPropertyHint(

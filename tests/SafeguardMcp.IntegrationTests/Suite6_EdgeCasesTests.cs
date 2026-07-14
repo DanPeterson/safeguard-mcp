@@ -67,11 +67,21 @@ public class Suite6_EdgeCasesTests
     {
         _fixture.RequireAvailable();
 
-        var result = await _fixture.ExecuteAsync(
+        var result = await _fixture.ExecuteRawAsync(
             "GET",
             "/v4/Users",
             query: "count=true&limit=100");
 
+        // count=true surfaces the row count in meta.count with data left null,
+        // rather than overloading data with a bare integer.
+        if (EnvelopeTestHelpers.TryGetMetaCount(result, out var metaCount))
+        {
+            Assert.True(metaCount >= 0, $"Expected a non-negative count, got: {result}");
+            return;
+        }
+
+        // Legacy/transitional shape: the count came back in the body as a bare
+        // integer or a full array.
         var json = ExtractJsonBody(result);
         using var doc = JsonDocument.Parse(json);
         Assert.True(
