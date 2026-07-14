@@ -129,10 +129,18 @@ public class Suite4_WorkflowGuidedTests
             || workflow.Contains("Task Failures", StringComparison.OrdinalIgnoreCase),
             $"Expected the task-triage workflow, got: {workflow}");
 
-        var result = await _fixture.ExecuteAsync(
+        var result = await _fixture.ExecuteRawAsync(
             "GET",
             "/v4/AssetAccounts",
             query: "filter=TaskProperties.HasAccountTaskFailure eq true&count=true&limit=100");
+
+        // The query is valid if it executes without error. count=true surfaces the
+        // row count in meta.count (data null); older shapes returned it in the body.
+        if (EnvelopeTestHelpers.TryGetMetaCount(result, out var metaCount))
+        {
+            Assert.True(metaCount >= 0, $"Expected a non-negative count, got: {result}");
+            return;
+        }
 
         var json = ExtractJsonBody(result);
         using var doc = JsonDocument.Parse(json);
