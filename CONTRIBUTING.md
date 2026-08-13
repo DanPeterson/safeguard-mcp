@@ -1,5 +1,10 @@
 # Contributing to Safeguard MCP Server
 
+## Reporting security vulnerabilities
+
+Please do not report security vulnerabilities through public GitHub issues.
+See [SECURITY.md](SECURITY.md) for how to report them privately.
+
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (or later)
