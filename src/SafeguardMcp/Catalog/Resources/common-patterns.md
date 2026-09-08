@@ -48,6 +48,8 @@ POST /v4/Roles/{roleId}/Members/Remove  body: [{"Id": 1}]
 # Bulk asset / account operations — use the Batch* endpoints (POST /v4/{Resource}/BatchCreate,
 # /BatchUpdate, /BatchDelete) on Assets, AssetAccounts, Users, UserGroups, AccountGroups, AssetGroups.
 # Body is a JSON array; partial failures return per-row detail in one envelope.
+# NOTE: BatchDelete takes a flat array of integer IDs (e.g. [82, 83]) — NOT [{"Id": 82}].
+# (This differs from the collection Add/Remove endpoints above, which DO take [{"Id": <int>}].)
 # See workflow recipe: bulk-asset-operations.
 ```
 

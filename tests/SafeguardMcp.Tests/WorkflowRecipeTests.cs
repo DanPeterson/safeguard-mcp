@@ -5,6 +5,21 @@ namespace SafeguardMcp.Tests;
 public class WorkflowRecipeTests
 {
     [Fact]
+    public void BulkAssetOperations_DocumentsBatchDelete_AsFlatIntegerArray()
+    {
+        // Regression guard: the live Safeguard BatchDelete endpoints take a flat array of
+        // integer IDs (e.g. [82, 83]) per Core.json's requestBody schema (array of int32).
+        // The recipe once documented the object-wrapped form [{"Id": 1}], which made a bulk
+        // delete fail with HTTP 400 (code 70000, "Unexpected character"). Keep the doc honest
+        // so future callers build the correct body on the first try.
+        var recipe = SafeguardWorkflows.Lookup(null, "bulk-asset-operations");
+
+        Assert.DoesNotContain("was not found", recipe);
+        Assert.Contains("[1, 2]", recipe);
+        Assert.DoesNotContain("[{\"Id\": 1}, {\"Id\": 2}]", recipe);
+    }
+
+    [Fact]
     public void Workflows_ListsAllRecipes()
     {
         var result = SafeguardWorkflows.Lookup(null, null);
