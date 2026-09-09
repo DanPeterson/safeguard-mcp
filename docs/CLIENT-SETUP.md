@@ -18,6 +18,13 @@ uses TOML.
 > deployment shapes, and [README → HTTP Mode](../README.md#http-mode-shared-server-deployment)
 > for how clients point at one.
 
+> **Always point HTTP-mode clients at an `https://` URL.** The Safeguard
+> bearer token travels in the `Authorization` header on every request, so a
+> plaintext `http://` connection would leak it. The server binds plain HTTP
+> and expects a TLS-terminating reverse proxy/ingress in front; it **refuses**
+> non-HTTPS, non-loopback requests unless `MCP_ALLOW_INSECURE_HTTP=true` is
+> set (trusted/lab networks only).
+
 Set `SAFEGUARD_HOST` to the hostname of your appliance. In stdio mode you can
 omit it only if your MCP client supports elicitation forms — the server will
 then prompt for the hostname on first use. HTTP-mode deployments require

@@ -210,6 +210,13 @@ Front the container with a reverse proxy that terminates TLS, sets
 the user-facing hostname automatically. Set `MCP_PUBLIC_URL` /
 `RSTS_CLIENT_ID` in `.env` only if you need to pin the published URL.
 
+The server fails closed on plaintext: non-HTTPS, non-loopback requests
+are refused with `403`. The proxy's `X-Forwarded-Proto: https` (from a
+trusted CIDR — see below) satisfies the guard. On a trusted/lab network
+where you deliberately run without TLS, set `MCP_ALLOW_INSECURE_HTTP=true`
+to disable it; bearer tokens then travel in cleartext. The `/healthz`
+probe is exempt so plain-HTTP liveness/readiness checks keep working.
+
 ## Inferred URLs and forwarded-headers trust
 
 The OAuth bridge derives its public URL from `Request.Scheme +

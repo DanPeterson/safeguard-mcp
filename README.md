@@ -921,7 +921,11 @@ probes and load-balancer health checks; it returns `200 Healthy` once the host i
 > production deployments must front it with an authenticated reverse proxy, ingress
 > controller, or service mesh (mTLS, OAuth proxy, API gateway, etc.) that terminates
 > TLS. The bundled OAuth bridge enforces RFC 6749/8252 redirect-uri rules but does
-> not itself perform TLS.
+> not itself perform TLS. As a backstop, the server **fails closed**: it refuses
+> non-HTTPS, non-loopback requests (the effective scheme is read from a trusted
+> `X-Forwarded-Proto`, so a TLS-terminating proxy satisfies it). Set
+> `MCP_ALLOW_INSECURE_HTTP=true` to disable this guard on a trusted/lab network —
+> bearer tokens then travel in cleartext. The `/healthz` probe is never gated.
 
 For production HTTP deployments — Kubernetes manifests, Helm chart, Docker Compose,
 and the operational runbook — see [`deploy/README.md`](deploy/README.md).

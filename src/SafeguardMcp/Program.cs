@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
@@ -101,6 +102,10 @@ Model Context Protocol server for One Identity Safeguard for Privileged Password
 USAGE:
   safeguard-mcp                Run as MCP stdio server (default; for IDE integration).
   safeguard-mcp --http         Run as MCP HTTP server on http://localhost:8080/mcp.
+                               Binds plain HTTP: front it with a TLS-terminating
+                               reverse proxy/ingress in production. Non-HTTPS,
+                               non-loopback requests are refused unless
+                               MCP_ALLOW_INSECURE_HTTP=true.
                                OAuth metadata bridge is active by default;
                                set BRIDGE_DISABLED=true to opt out (relay only).
   safeguard-mcp login [opts]   Acquire a Safeguard user token via device-code
@@ -118,6 +123,9 @@ ENVIRONMENT:
   SAFEGUARD_USER,              are set, the server uses PKCE instead of device-code auth.
   SAFEGUARD_PASSWORD
   SAFEGUARD_IGNORE_SSL=true    Skip TLS verification (lab/test only).
+  MCP_ALLOW_INSECURE_HTTP=true In --http mode, allow non-HTTPS, non-loopback
+                               requests (bearer tokens travel in cleartext;
+                               trusted/lab networks only).
   ASPNETCORE_URLS              In --http mode, the URLs to bind (default http://0.0.0.0:8080).
 
 Documentation: https://github.com/OneIdentity/safeguard-mcp";
@@ -198,6 +206,31 @@ Documentation: https://github.com/OneIdentity/safeguard-mcp";
             builder.Services.AddSingleton<SchemaConsultationTracker>();
             builder.Services.AddHealthChecks();
 
+            // ForwardedHeaders trust list runs in HTTP mode regardless of
+            // the bridge: the secure-transport guard and (when enabled)
+            // the bridge both rely on the effective scheme reflecting a
+            // trusted X-Forwarded-Proto. Trust loopback by default plus
+            // RFC1918 ranges (the common case is cluster-internal
+            // ingress). Operators extend the list via the
+            // BRIDGE_TRUSTED_PROXIES env var; BridgeOptions.Parse
+            // already validated those CIDRs.
+            builder.Services.Configure<ForwardedHeadersOptions>(opts =>
+            {
+                opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor
+                                      | ForwardedHeaders.XForwardedProto
+                                      | ForwardedHeaders.XForwardedHost;
+                opts.ForwardLimit = 2;
+                opts.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("10.0.0.0/8"));
+                opts.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("172.16.0.0/12"));
+                opts.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("192.168.0.0/16"));
+
+                if (bridgeOptions != null)
+                {
+                    foreach (var net in bridgeOptions.TrustedProxies)
+                        opts.KnownIPNetworks.Add(net);
+                }
+            });
+
             if (bridgeOptions != null)
             {
                 builder.Services.AddSingleton(bridgeOptions);
@@ -206,25 +239,6 @@ Documentation: https://github.com/OneIdentity/safeguard-mcp";
                 builder.Services.AddSingleton<OAuth.AuthorizeFlowStore>();
                 builder.Services.AddSingleton<OAuth.AuthCodeStore>();
                 builder.Services.AddSingleton<OAuth.IRstsTokenExchanger, OAuth.SdkRstsTokenExchanger>();
-
-                // ForwardedHeaders trust list: loopback by default plus
-                // RFC1918 ranges (the common case is cluster-internal
-                // ingress). Operators extend the list via the
-                // BRIDGE_TRUSTED_PROXIES env var; BridgeOptions.Parse
-                // already validated those CIDRs.
-                builder.Services.Configure<ForwardedHeadersOptions>(opts =>
-                {
-                    opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor
-                                          | ForwardedHeaders.XForwardedProto
-                                          | ForwardedHeaders.XForwardedHost;
-                    opts.ForwardLimit = 2;
-                    opts.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("10.0.0.0/8"));
-                    opts.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("172.16.0.0/12"));
-                    opts.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("192.168.0.0/16"));
-
-                    foreach (var net in bridgeOptions.TrustedProxies)
-                        opts.KnownIPNetworks.Add(net);
-                });
             }
 
             AddSafeguardMcpComponents(builder.Services.AddMcpServer().WithHttpTransport());
@@ -239,14 +253,37 @@ Documentation: https://github.com/OneIdentity/safeguard-mcp";
             // /service/Notification/v4/Status) so the first tool call has
             // schemas/endpoints ready.
             WarmCatalog(app.Services);
-            if (bridgeOptions != null)
+            // Trust X-Forwarded-* from configured upstreams so the
+            // effective scheme/host reflect the externally-visible values
+            // when fronted by an ingress / reverse proxy. Required in both
+            // bridge and relay-only modes so the secure-transport guard
+            // below sees a proxy-terminated HTTPS request as secure.
+            app.UseForwardedHeaders();
+
+            // Fail closed on plaintext transport: the Safeguard bearer
+            // must not traverse a non-HTTPS client<->server hop.
+            var allowInsecureHttp = SecureTransportGuard.IsAllowInsecure(Environment.GetEnvironmentVariable);
+            if (allowInsecureHttp)
             {
-                // Trust X-Forwarded-* from configured upstreams so
-                // BridgeUrlResolver sees the externally-visible scheme
-                // and host when the bridge is fronted by an ingress /
-                // reverse proxy.
-                app.UseForwardedHeaders();
+                app.Services.GetRequiredService<ILogger<Program>>().LogWarning(
+                    "{EnvVar}=true — the HTTPS transport guard is disabled; Safeguard bearer tokens may traverse "
+                    + "the client<->server hop in cleartext. Use only on trusted/lab networks.",
+                    SecureTransportGuard.AllowInsecureEnvVar);
             }
+            app.Use(async (context, next) =>
+            {
+                if (!SecureTransportGuard.IsRequestAllowed(context, allowInsecureHttp))
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    context.Response.ContentType = "text/plain; charset=utf-8";
+                    await context.Response.WriteAsync(
+                        "This MCP server requires HTTPS: the Safeguard bearer token must not traverse a plaintext "
+                        + "connection. Front the server with a TLS-terminating reverse proxy/ingress that forwards "
+                        + "X-Forwarded-Proto, or set MCP_ALLOW_INSECURE_HTTP=true to override on a trusted/lab network.");
+                    return;
+                }
+                await next();
+            });
             app.MapHealthChecks("/healthz");
             app.MapMcp("/mcp");
             if (bridgeOptions != null)
