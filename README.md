@@ -15,18 +15,43 @@ operations like migrations.
 
 ## Installation
 
-Install via npm (no .NET SDK required):
+The server ships as a native npm package — **no .NET SDK required**. Most MCP
+clients launch it for you (see [Wiring up your MCP client](#wiring-up-your-mcp-client));
+the commands here are for running it directly or installing it globally.
+
+**Run on demand with `npx`** (what the client configs use):
 
 ```bash
-npx @oneidentity/safeguard-mcp
+npx -y @oneidentity/safeguard-mcp
 ```
 
-Or install globally:
+`npx` downloads the package on first use and caches it. **It does not
+auto-upgrade** — once a version is cached, later launches reuse it, so a bare
+package name can keep running an old release even after a newer one is
+published. Use the version spec to say explicitly what each launch should run:
+
+- `@oneidentity/safeguard-mcp@latest` — re-check the registry and fetch the
+  newest published release each launch, so it picks up updates between sessions.
+- `@oneidentity/safeguard-mcp@0.3.1` — pin an exact version (fully reproducible;
+  you bump the number yourself to upgrade).
+- a bare name (no `@...`) — reuses whatever is cached and won't reliably pull new
+  releases; prefer `@latest` or a pinned version instead.
+
+The `-y` flag only skips npx's install-confirmation prompt (needed when a client
+launches it non-interactively); it does not control updates.
+
+**Install globally** for a persistent `safeguard-mcp` command and no per-launch
+download:
 
 ```bash
 npm install -g @oneidentity/safeguard-mcp
 safeguard-mcp
+npm update -g @oneidentity/safeguard-mcp   # upgrade later
 ```
+
+With a global install, a client config drops `npx` and points `command` straight
+at the binary — `"command": "safeguard-mcp"` with no `args` (keep the same
+`env`). See [`docs/CLIENT-SETUP.md`](docs/CLIENT-SETUP.md) for per-client files.
 
 ### Docker
 
@@ -104,11 +129,11 @@ and SSH key rotation, health checks, audits, and cross-server workflows.
 
 See [`docs/CLIENT-SETUP.md`](docs/CLIENT-SETUP.md) for copy-pasteable stdio
 configurations for **Claude Desktop**, **Claude Code**, **VS Code (GitHub
-Copilot)**, and **GitHub Copilot CLI**.
+Copilot)**, **GitHub Copilot CLI**, and **OpenAI Codex CLI**.
 
-All four clients launch the same server (`npx -y @oneidentity/safeguard-mcp`)
+They all launch the same server (`npx -y @oneidentity/safeguard-mcp`)
 and read the same `SAFEGUARD_HOST` environment variable; they differ only in
-config file location and JSON key names.
+config file location and format (JSON key names, or TOML for Codex).
 
 On first use, the server prints a verification URL and one-time code; complete
 the sign-in from any browser to authorize the connection.
@@ -225,8 +250,9 @@ stored in config files. A complete stdio server entry looks like:
 
 See [`docs/CLIENT-SETUP.md`](docs/CLIENT-SETUP.md) for the exact file and
 top-level key for each client (Claude Desktop, Claude Code, VS Code Copilot,
-GitHub Copilot CLI) — VS Code uses `servers` instead of `mcpServers`, and the
-Copilot CLI adds a `"type": "local"` field.
+GitHub Copilot CLI, OpenAI Codex CLI) — VS Code uses `servers` instead of
+`mcpServers`, the Copilot CLI adds a `"type": "local"` field, and Codex uses
+TOML `[mcp_servers.*]` tables.
 
 Setting `SAFEGUARD_HOST` is recommended for every deployment. **HTTP mode
 requires it at startup.** In stdio mode you *may* omit it if your MCP client
