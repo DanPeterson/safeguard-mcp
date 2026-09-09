@@ -444,6 +444,8 @@ internal sealed class SafeguardApiTool
     [Description("Call any Safeguard API endpoint. Path must start with /v4/...; the service "
         + "(Core/Appliance/Notification) is auto-detected — do not add a /service/{name}/ prefix. "
         + "Use Safeguard_Discover to find endpoints and Safeguard_Schema for request-body shape. "
+        + "Build fields=/filter=/orderby= property names and request bodies from Safeguard_Schema or a "
+        + "prior response — do not guess them. "
         + "JSON responses are a { data, meta } envelope (meta carries notices, paging, truncation); "
         + "responses are capped (~30 KB), so project with fields= or page via meta.paging.next. "
         + "For repeated writes to one collection, check for a Batch* sibling (Discover search='Batch'). "
