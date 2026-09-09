@@ -1,10 +1,16 @@
 # Client Setup
 
 How to wire `safeguard-mcp` into the major MCP clients in **stdio mode** —
-where the client launches the server as a local subprocess. All four clients
+where the client launches the server as a local subprocess. These clients
 use the same underlying server binary (`npx -y @oneidentity/safeguard-mcp`)
 and the same environment variables; they differ only in where the config
-lives and what the top-level JSON keys are called.
+lives and its format — most use JSON (`mcpServers` / `servers`), while Codex
+uses TOML.
+
+> **Controlling the version / global installs.** The examples below launch the
+> server with `npx` and a bare package name. To pin a version, auto-update with
+> `@latest`, or point a client at a global install instead of `npx`, see
+> [README → Installation](../README.md#installation).
 
 > Looking for the shared HTTP deployment shape instead? `safeguard-mcp` can
 > also run as a long-lived HTTP server that multiple users connect to over
@@ -28,6 +34,7 @@ complete the sign-in from any browser to authorize the connection.
 | Claude Code           | `.mcp.json` (project) / `~/.claude.json` | `mcpServers`  | `claude mcp add`              |
 | VS Code (Copilot)     | `.vscode/mcp.json` (workspace)           | `servers`     | no                            |
 | GitHub Copilot CLI    | `~/.copilot/mcp-config.json` (global)    | `mcpServers`  | `/mcp add` (interactive)      |
+| OpenAI Codex CLI      | `~/.codex/config.toml` (global) / `.codex/config.toml` (project) | `[mcp_servers.*]` (TOML) | `codex mcp add` |
 
 ---
 
@@ -160,3 +167,33 @@ Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to save. The server is available immediately.
   `stdio`). Use `stdio` if you want the same JSON to be portable to other
   clients.
 - Manage with `/mcp show`, `/mcp edit safeguard`, `/mcp delete safeguard`.
+
+---
+
+## OpenAI Codex CLI
+
+Codex stores MCP servers in **TOML**, not JSON. Add via the CLI (recommended)
+or hand-edit `~/.codex/config.toml` (user) or `.codex/config.toml` (project).
+
+**CLI:**
+
+```bash
+codex mcp add safeguard \
+  --env SAFEGUARD_HOST=safeguard.corp.example.com \
+  -- npx -y @oneidentity/safeguard-mcp
+```
+
+Everything after `--` is the server launch command; `--env` flags come before it.
+
+**TOML:**
+
+```toml
+[mcp_servers.safeguard]
+command = "npx"
+args = ["-y", "@oneidentity/safeguard-mcp"]
+env = { SAFEGUARD_HOST = "safeguard.corp.example.com" }
+```
+
+- **Config scope:** user (`~/.codex/config.toml`) or project (`.codex/config.toml`).
+- **Table header:** `[mcp_servers.<name>]` — a TOML table, not a JSON key.
+- Manage with `codex mcp list`; type `/mcp` in the Codex TUI to see active servers.
