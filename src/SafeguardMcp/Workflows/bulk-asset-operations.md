@@ -25,10 +25,10 @@ Batch operations at a glance:
 Batch endpoint shape:
 - POST /v4/{Resource}/BatchCreate — body is a JSON array; each element matches the single-item POST body.
 - POST /v4/{Resource}/BatchUpdate — body is a JSON array of full objects (each MUST include Id).
-- POST /v4/{Resource}/BatchDelete — body is a JSON array of {"Id": <int>} entries.
+- POST /v4/{Resource}/BatchDelete — body is a flat JSON array of integer IDs (e.g. [82, 83, 86]), NOT an array of objects. Do NOT wrap the ids as {"Id": <int>} — the delete endpoints take bare ints and reject object entries with HTTP 400 (code 70000, "Unexpected character").
 - All three use POST regardless of intent — the verb lives in the URL path segment.
 - Each item in a batch array is independent: partial failures return per-item error details in the same response.
-- For dependency-blocked deletes (50104 — asset/account referenced by an active AccessRequest), close the named request via Safeguard_CloseAccessRequest then re-issue the BatchDelete on the unblocked ids; do NOT fan back out to N parallel deletes.
+- For dependency-blocked deletes (50104 — asset/account referenced by an active AccessRequest), either close the named request via Safeguard_CloseAccessRequest then re-issue the BatchDelete on the unblocked ids, or pass ?forceDelete=true (the endpoint's documented override) to delete despite the dependency; do NOT fan back out to N parallel deletes.
 - Use Safeguard_Discover with search="Batch" to enumerate Batch* endpoints on the live appliance.
 
 Examples:
@@ -45,7 +45,7 @@ Examples:
 - POST /v4/Assets/BatchUpdate
   Body: array of full asset objects (each MUST include Id).
 - POST /v4/Assets/BatchDelete
-  [{"Id": 1}, {"Id": 2}]
+  [1, 2]
 
 Steps (Single-Item — for small N or when batch is not available):
 1. Identify the target partition (or use default):

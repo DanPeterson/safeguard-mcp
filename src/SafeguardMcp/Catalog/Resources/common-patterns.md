@@ -15,6 +15,21 @@ GET /v4/Users  query: filter=UserName ieq 'john.smith'&fields=Id,UserName,Displa
 GET /v4/Roles  query: filter=Name icontains 'help desk'&fields=Id,Name,MemberCount
 ```
 
+## Filtering: enum vs free-text properties
+
+String properties (`Name`, `DisplayName`, `UserName`) take free text via `contains`/`ieq`. Enum-typed
+properties (e.g. `PlatformType`) only accept an exact, case-sensitive defined member — a free-text guess
+fails with HTTP 400 (70010). `PlatformType` is a *coarse* category (Windows, Ubuntu, FreeBsd,
+OtherManaged, …); the specific OS / product / version lives in the free-text `DisplayName`.
+
+```
+# Check whether a specific platform exists — filter the free-text DisplayName, don't guess a PlatformType
+GET /v4/Platforms  query: filter=DisplayName contains 'BSD'&fields=Id,PlatformType,DisplayName
+
+# To filter on an enum, discover its members first, then match one exactly
+Safeguard_Reference topic=enum name=PlatformType   → then filter=PlatformType eq 'FreeBsd'
+```
+
 ## Create with Dependencies
 
 Many objects have required relationships. Create in order:
@@ -48,6 +63,8 @@ POST /v4/Roles/{roleId}/Members/Remove  body: [{"Id": 1}]
 # Bulk asset / account operations — use the Batch* endpoints (POST /v4/{Resource}/BatchCreate,
 # /BatchUpdate, /BatchDelete) on Assets, AssetAccounts, Users, UserGroups, AccountGroups, AssetGroups.
 # Body is a JSON array; partial failures return per-row detail in one envelope.
+# NOTE: BatchDelete takes a flat array of integer IDs (e.g. [82, 83]) — NOT [{"Id": 82}].
+# (This differs from the collection Add/Remove endpoints above, which DO take [{"Id": <int>}].)
 # See workflow recipe: bulk-asset-operations.
 ```
 
